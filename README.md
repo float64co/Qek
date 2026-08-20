@@ -11,6 +11,10 @@ a Source-engine-style console, both backed by the same optimistic-local /
 authoritative-server pattern used for player movement, so edits persist to
 disk and sync to every connected player live.
 
+![Qek screenshot 1](docs/screenshot-1.png)
+![Qek screenshot 2](docs/screenshot-2.png)
+![Qek screenshot 3](docs/screenshot-3.png)
+
 ```
 Language:    C (Emscripten → WASM)
 Rendering:   WebGL 1.0 (GLES2), flat-shaded
