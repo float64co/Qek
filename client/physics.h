@@ -18,8 +18,35 @@
 #define ROCKET_SPEED     1400.0f
 #define ROCKET_RADIUS    120.0f
 #define ROCKET_FORCE     900.0f
-#define ROCKET_SELF_DMG  0.7f     /* fraction of blast damage applied to self */
 #define ROCKET_SPLASH_DMG 100.0f  /* max direct damage */
+#define ROCKET_SELF_KNOCKBACK_MULT 1.6f /* self-splash push is stronger than
+                                          * what the same blast does to
+                                          * someone else, so rocket jumps
+                                          * launch you noticeably higher
+                                          * without buffing splash knockback
+                                          * against other players */
+#define ROCKET_MUZZLE_DOWN    8.0f   /* muzzle point offset below the eye, in
+                                       * world space, so the rocket visibly
+                                       * launches a little lower than
+                                       * dead-center. Kept small: lateral
+                                       * deviation from the true aim line is
+                                       * bounded by this value (see
+                                       * ROCKET_CONVERGE_DIST below), and a
+                                       * big offset reads as "off-center"
+                                       * for the whole flight in an arena
+                                       * this size */
+#define ROCKET_CONVERGE_DIST  120.0f /* distance along the view ray the
+                                       * muzzle-offset shot re-converges
+                                       * onto exactly — closer than the old
+                                       * 500 units, which was far past most
+                                       * actual engagement distances in this
+                                       * ~224-unit arena and meant the
+                                       * "correction" had barely started by
+                                       * the time a shot hit anything.
+                                       * 120 (roughly ROCKET_RADIUS) keeps
+                                       * the worst-case deviation at any
+                                       * realistic range within a couple of
+                                       * ROCKET_MUZZLE_DOWN's worth of units */
 #define MAX_ROCKETS      32
 
 #define MAX_BOTS         8   /* hard cap; addbot/delbot manage bots within this */

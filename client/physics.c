@@ -202,15 +202,30 @@ Rocket *physics_fire_rocket(GameState *gs, Player *p) {
     float sp = sinf(p->pitch), cp = cosf(p->pitch);
     Vec3f eye = {p->pos.x, p->pos.y + player_eye_h(p), p->pos.z};
 
-    /* View-aligned direction — matches crosshair exactly */
-    Vec3f dir = vec3_norm((Vec3f){-sy*cp, sp, -cy*cp});
+    /* Reticule direction — exactly what the crosshair looks at */
+    Vec3f aim_dir = vec3_norm((Vec3f){-sy*cp, sp, -cy*cp});
 
-    /* Spawn slightly forward so the rocket clears the player AABB */
-    r->pos = (Vec3f){
-        eye.x + dir.x * (PLAYER_HALFWIDTH + 4.0f),
-        eye.y + dir.y * (PLAYER_HALFWIDTH + 4.0f),
-        eye.z + dir.z * (PLAYER_HALFWIDTH + 4.0f)
-    };
+    /* Muzzle point: forward off the player's AABB, down off the eye — in
+     * WORLD space, not camera space. A camera-relative "down" (perpendicular
+     * to aim_dir and world up) sounds right but isn't: as pitch steepens
+     * toward straight down, that vector rotates to point mostly *sideways*
+     * instead of down (classic gimbal-lock behaviour of any roll-free FPS
+     * camera basis), which shoves the muzzle ~20 units horizontally at
+     * exactly the aim angle rocket jumps use, right when it should stay
+     * put. A fixed world-down offset has no such singularity — it stays a
+     * small, predictable dip at every pitch. */
+    Vec3f muzzle = vec3_add(
+        vec3_add(eye, vec3_scale(aim_dir, PLAYER_HALFWIDTH + 4.0f)),
+        (Vec3f){0.0f, -ROCKET_MUZZLE_DOWN, 0.0f}
+    );
+
+    /* Re-converge onto the exact reticule line at ROCKET_CONVERGE_DIST, so
+     * the rocket still travels toward what the crosshair is aiming at
+     * despite launching from below screen-center. */
+    Vec3f target = vec3_add(eye, vec3_scale(aim_dir, ROCKET_CONVERGE_DIST));
+    Vec3f dir    = vec3_norm(vec3_sub(target, muzzle));
+
+    r->pos = muzzle;
     r->vel = vec3_scale(dir, ROCKET_SPEED);
     return r;
 }
@@ -227,7 +242,17 @@ static void rocket_explode(GameState *gs, Rocket *r) {
         Vec3f eye = {p->pos.x, p->pos.y + player_eye_h(p), p->pos.z};
         Vec3f delta = vec3_sub(eye, r->pos);
         float dist = vec3_len(delta);
-        if (dist >= ROCKET_RADIUS) continue;
+        int   is_self = (p->id == r->owner_id);
+
+        /* Self-splash falloff is measured from the player's feet (`p->pos`),
+         * not eye height, so rocket-jump strength doesn't depend on whether
+         * you happened to be crouching. A blast at your feet is at your
+         * feet either way — crouching only used to matter here because it
+         * also lowers the eye, artificially shrinking this same distance.
+         * Direction/knockback below still uses `delta` (eye-based) —
+         * unaffected — and so does the other-player case entirely. */
+        float falloff_dist = is_self ? vec3_len(vec3_sub(p->pos, r->pos)) : dist;
+        if (falloff_dist >= ROCKET_RADIUS) continue;
 
         /* Occlusion check: skip if solid geometry blocks the straight line
          * from the explosion to this player — e.g. a floor/wall between
@@ -253,24 +278,25 @@ static void rocket_explode(GameState *gs, Rocket *r) {
             if (blocked_t >= 0) continue;
         }
 
-        float frac = 1.0f - dist / ROCKET_RADIUS;
+        float frac = 1.0f - falloff_dist / ROCKET_RADIUS;
 
-        /* Impulse: away from explosion centre */
-        Vec3f impulse = vec3_scale(vec3_norm(delta), frac * ROCKET_FORCE);
+        /* Impulse: away from explosion centre. Self-splash is boosted so
+         * rocket jumps launch you meaningfully higher, without changing the
+         * knockback a rocket deals to anyone else. */
+        float force = frac * ROCKET_FORCE * (is_self ? ROCKET_SELF_KNOCKBACK_MULT : 1.0f);
+        Vec3f impulse = vec3_scale(vec3_norm(delta), force);
         p->vel = vec3_add(p->vel, impulse);
 
-        /* Damage */
-        int dmg = (int)(ROCKET_SPLASH_DMG * frac);
-        if (p->id == r->owner_id) dmg = (int)(dmg * ROCKET_SELF_DMG);
-        p->hp -= dmg;
-
-        /* Rocket jumping: never kill player from self-damage below 1hp */
-        if (p->id == r->owner_id && p->hp < 1) p->hp = 1;
-        else if (p->hp <= 0) {
-            p->alive = 0;
-            p->hp = 0;
-            p->respawn_timer = 3.0f;
-            printf("Player %d killed by player %d's rocket\n", p->id, r->owner_id);
+        /* Damage: rockets never hurt their owner, only other players */
+        if (!is_self) {
+            int dmg = (int)(ROCKET_SPLASH_DMG * frac);
+            p->hp -= dmg;
+            if (p->hp <= 0) {
+                p->alive = 0;
+                p->hp = 0;
+                p->respawn_timer = 3.0f;
+                printf("Player %d killed by player %d's rocket\n", p->id, r->owner_id);
+            }
         }
     }
 }

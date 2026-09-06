@@ -85,11 +85,25 @@ Ground movement has no coasting: releasing WASD zeroes your horizontal
 velocity almost instantly (`physics_apply_input` in `physics.c`) rather than
 sliding to a stop, while acceleration/turning while a key is held is
 unchanged. Rockets never have gravity applied (pure `pos += vel*dt` on both
-client and server) and always travel exactly along the direction you're
-looking (`view_dir`'s `{-sin(yaw)cos(pitch), sin(pitch), -cos(yaw)cos(pitch)}`
-formula, shared by the camera, rocket firing, and the editor's raycast) — the
-rendered rocket box now rotates to visibly point along its actual velocity
-too, instead of always rendering axis-aligned.
+client and server).
+
+Rockets launch from below your eye rather than dead-center — the muzzle point
+is offset a fixed amount straight down in world space, then the shot
+re-targets the exact point the reticule is aiming at (the same convergence
+trick real FPS weapon viewmodels use), so despite visibly originating lower
+it always flies toward what the crosshair says. The offset is deliberately
+world-space rather than camera-space: a camera-relative "down" rotates to
+point mostly sideways once pitch gets steep (gimbal lock, same issue any
+roll-free FPS camera basis has), which would shove the muzzle sideways at
+exactly the aim angle rocket jumps use — a world-down offset has no such
+singularity at any pitch. Both the offset and the convergence distance are
+kept small (`ROCKET_MUZZLE_DOWN`/`ROCKET_CONVERGE_DIST` in `physics.h`) —
+worst-case lateral deviation from the true aim line is bounded by the offset
+itself, and a convergence distance tuned to this arena's actual scale (not
+some arbitrary long-range default) means most real shots are visually close
+to dead-center for their whole flight, not just at one specific distance.
+The rendered rocket box rotates to point along its
+actual travel direction, not the raw view direction.
 
 Crouch is bound to `C`, not `Ctrl` — `Ctrl+W` is a browser-reserved "close tab"
 shortcut that `preventDefault()` cannot block, so `Ctrl` isn't safe to combine
@@ -99,11 +113,17 @@ entirely when that's what triggered it) — the console's `open` state is kept
 in sync by watching `InputState.pointer_locked` directly rather than relying
 on ever seeing an Escape keydown.
 
-**Rocket jumping**: hold `C` to crouch (lowers where rockets spawn from,
-closer to your feet), aim straight down, jump (`Space`) and fire (`LMB`) in
-the same motion. The explosion impulse stacks additively with your velocity
-— you keep momentum in the air (Quake-style `sv_airaccelerate`). Self-damage
-is reduced but never kills you outright.
+**Rocket jumping**: aim straight down, jump (`Space`) and fire (`LMB`) in the
+same motion — crouching is not required. The explosion impulse stacks
+additively with your velocity — you keep momentum in the air (Quake-style
+`sv_airaccelerate`). Self-splash knockback is boosted
+(`ROCKET_SELF_KNOCKBACK_MULT`, 1.6×) relative to what the same blast does to
+anyone else, so jumps launch you noticeably higher, and rockets never damage
+their own owner at all — only other players take splash damage. Self-splash
+falloff is measured from your feet rather than your eyes, so the boost is the
+same whether you're standing or crouched (`C`) — crouching still lowers the
+muzzle and halves ground speed if you want it, it just isn't needed for a
+strong jump anymore.
 
 Splash damage/knockback is occlusion-checked — a rocket that hits the far
 side of a wall or floor you've built won't hurt you through it, on both
@@ -268,6 +288,21 @@ The world uses a Sauerbraten-exact octree:
 - Each node: `EMPTY | SOLID | DEFORMED | SUBDIVIDED`
 - `DEFORMED` nodes have 8 corner height offsets (`i8`) — same as Cube 2
 
+The default arena's interior carve sweeps a 3×3×3 grid of segments per axis
+(`octree_make_default_map()` in `octree.c`, ported line-for-line in
+`mapdata.py`) rather than one uniform-size cube per combination — the three
+segments (128/64/32 units) aren't the same size, so a cube sized for one axis
+silently left most combinations only partially carved, leaving roughly
+three-quarters of the intended open interior as solid, uncarved rock (mostly
+contiguous with the outer wall, so not visually obvious as "extra" geometry).
+This was hit via a Sauerbraten-scale-authentic rocket-jump apex reproduced in
+a native test harness (`octree_is_solid()` mapped across a horizontal slice
+at several heights) rather than by eyeballing the level. If you have an
+existing `maps/default.cmap` on disk, it was generated before this fix and
+still has the old broken geometry — run the console's `newmap` command once
+connected to regenerate it correctly (this won't touch any other saved map
+name).
+
 **STL Export (F4):**
 - Walks the octree, collects all exposed faces
 - Non-planar quads split on shorter diagonal (Sauerbraten convention) → watertight mesh
@@ -288,13 +323,14 @@ The world uses a Sauerbraten-exact octree:
 
 ```c
 // On explosion, per affected player:
-vec3 delta   = player_eye_pos - explosion_pos;
-float frac   = 1.0 - dist / ROCKET_RADIUS;   // 0..1
-vec3 impulse = normalize(delta) * frac * ROCKET_FORCE;
-player.vel  += impulse;   // additive — stack-able!
+vec3  delta   = player_eye_pos - explosion_pos;
+float frac    = 1.0 - dist / ROCKET_RADIUS;   // 0..1
+float mult    = is_owner ? ROCKET_SELF_KNOCKBACK_MULT : 1.0f;
+vec3  impulse = normalize(delta) * frac * ROCKET_FORCE * mult;
+player.vel   += impulse;   // additive — stack-able!
 
-// Self-damage capped: never kills self (min 1hp)
-// Enables rocket jumping off floors and walls
+// Rockets never damage their own owner, only other players.
+// Self-splash knockback is boosted instead, for higher rocket jumps.
 ```
 
 Key constants (tune in `physics.h`):
@@ -303,7 +339,9 @@ Key constants (tune in `physics.h`):
 |----------|-------|--------|
 | `ROCKET_FORCE` | 900 | Blast impulse strength |
 | `ROCKET_RADIUS` | 120 | Explosion radius |
-| `ROCKET_SELF_DMG` | 0.7 | Self-damage fraction |
+| `ROCKET_SELF_KNOCKBACK_MULT` | 1.6 | Self-splash push multiplier (rocket-jump height) |
+| `ROCKET_MUZZLE_DOWN` | 8 | Muzzle offset below the eye (bottom-center launch point) |
+| `ROCKET_CONVERGE_DIST` | 120 | Distance the muzzle-offset shot re-converges onto the reticule |
 | `AIR_ACCEL` | 10 | Air strafe acceleration |
 | `MOVE_SPEED` | 200 | Ground speed |
 

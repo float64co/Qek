@@ -101,7 +101,12 @@ ROCKET_SPEED      = 800.0
 ROCKET_RADIUS     = 120.0
 ROCKET_FORCE      = 900.0
 ROCKET_SPLASH_DMG = 100.0
-ROCKET_SELF_DMG   = 0.7
+ROCKET_SELF_KNOCKBACK_MULT = 1.6  # self-splash push boosted for higher rocket
+                                   # jumps, without changing knockback dealt
+                                   # to other players — matches client/physics.h
+ROCKET_MUZZLE_DOWN   = 8.0   # muzzle offset below the eye, in world space —
+                              # matches client/physics.h's ROCKET_MUZZLE_DOWN
+ROCKET_CONVERGE_DIST = 120.0 # matches client/physics.h's ROCKET_CONVERGE_DIST
 
 next_rocket_id = 0
 
@@ -230,9 +235,25 @@ class GameWorld:
         sp, cp = math.sin(owner.pitch), math.cos(owner.pitch)
         eye_h = PLAYER_EYE_H_CROUCH if crouch else PLAYER_EYE_H
         eye = Vec3(owner.pos.x, owner.pos.y + eye_h, owner.pos.z)
-        d   = Vec3(-sy*cp, sp, -cy*cp).normalized()
-        off = PLAYER_HALFWIDTH + 2
-        pos = eye + d * off
+
+        # Reticule direction — exactly what the crosshair looks at
+        aim_dir = Vec3(-sy*cp, sp, -cy*cp).normalized()
+
+        # Muzzle: forward off the AABB, down off the eye in WORLD space (not
+        # camera space) — mirrors client/physics.c's physics_fire_rocket().
+        # A camera-relative "down" rotates to point mostly sideways once
+        # pitch gets steep (gimbal lock in any roll-free FPS camera basis),
+        # which would shove the muzzle horizontally at exactly the aim angle
+        # rocket jumps use. A fixed world-down offset has no such singularity.
+        off    = PLAYER_HALFWIDTH + 2
+        muzzle = eye + aim_dir * off + Vec3(0.0, -ROCKET_MUZZLE_DOWN, 0.0)
+
+        # Re-converge onto the reticule line so the rocket still flies
+        # toward what the crosshair is aiming at
+        target = eye + aim_dir * ROCKET_CONVERGE_DIST
+        d      = (target - muzzle).normalized()
+
+        pos = muzzle
         vel = d   * ROCKET_SPEED
         r   = Rocket(next_rocket_id, owner.id, pos, vel)
         with self.lock:
@@ -356,7 +377,16 @@ class GameWorld:
             eye   = Vec3(p.pos.x, p.pos.y+PLAYER_EYE_H, p.pos.z)
             delta = eye - r.pos
             dist  = delta.length()
-            if dist >= ROCKET_RADIUS: continue
+            is_self = (p.id == r.owner_id)
+
+            # Self-splash falloff is measured from the player's feet
+            # (p.pos), not eye height, so rocket-jump strength doesn't
+            # depend on whether you happened to be crouching — mirrors
+            # client/physics.c's rocket_explode(). Direction/knockback
+            # below still uses `delta` (eye-based), and so does the
+            # other-player case entirely.
+            falloff_dist = (p.pos - r.pos).length() if is_self else dist
+            if falloff_dist >= ROCKET_RADIUS: continue
 
             # Occlusion: skip if solid geometry (e.g. a player-built floor)
             # blocks the straight line from the explosion to this player —
@@ -369,21 +399,25 @@ class GameWorld:
                                      (d.x, d.y, d.z), dist - 2.0) is not None:
                     continue
 
-            frac    = 1.0 - dist/ROCKET_RADIUS
-            impulse = delta.normalized() * (frac * ROCKET_FORCE)
+            frac = 1.0 - falloff_dist/ROCKET_RADIUS
+
+            # Self-splash push is boosted so rocket jumps launch you
+            # meaningfully higher, without changing knockback dealt to
+            # other players.
+            force   = frac * ROCKET_FORCE * (ROCKET_SELF_KNOCKBACK_MULT if is_self else 1.0)
+            impulse = delta.normalized() * force
             p.vel   = p.vel + impulse
 
-            dmg = int(ROCKET_SPLASH_DMG * frac)
-            if p.id == r.owner_id: dmg = int(dmg * ROCKET_SELF_DMG)
+            # Rockets never hurt their owner, only other players
+            if not is_self:
+                dmg = int(ROCKET_SPLASH_DMG * frac)
+                p.hp -= dmg
+                dmg_events.append((p.id, -dmg))
 
-            p.hp -= dmg
-            if p.id == r.owner_id and p.hp < 1: p.hp = 1
-            dmg_events.append((p.id, -dmg))
-
-            if p.hp <= 0 and p.id != r.owner_id:
-                p.alive     = False
-                p.respawn_t = 3.0
-                obit_events.append((r.owner_id, p.id))
+                if p.hp <= 0:
+                    p.alive     = False
+                    p.respawn_t = 3.0
+                    obit_events.append((r.owner_id, p.id))
 
         # Broadcast explode packet
         pkt = struct.pack('<BBfff', PKT_EXPLODE, r.id,

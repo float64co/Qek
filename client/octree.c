@@ -347,41 +347,26 @@ void octree_make_default_map(Octree *ot) {
     octree_set_solid_cube(ot, 0, 0, 0, 256);
 
     /* ---- 2. Carve interior [16..240]^3 ----
-       224 = 128 + 64 + 32.  Split each axis into those three segments.
-       We need 3^3 = 27 non-overlapping cubes.  Axes:
+       224 = 128 + 64 + 32.  Split each axis into those three segments:
          A: [16..144]  size=128
          B: [144..208] size=64
          C: [208..240] size=32
-    */
-    /* xA yA zA */ octree_set_empty_cube(ot,  16,  16,  16, 128);
-    /* xA yA yB */ octree_set_empty_cube(ot,  16,  16, 144,  64);
-    /* xA yA zC */ octree_set_empty_cube(ot,  16,  16, 208,  32);
-    /* xA yB zA */ octree_set_empty_cube(ot,  16, 144,  16,  64);  /* NOTE: y here is 2nd arg */
-    /* xA yB zB */ octree_set_empty_cube(ot,  16, 144, 144,  64);
-    /* xA yB zC */ octree_set_empty_cube(ot,  16, 144, 208,  32);
-    /* xA yC zA */ octree_set_empty_cube(ot,  16, 208,  16,  32);
-    /* xA yC zB */ octree_set_empty_cube(ot,  16, 208, 144,  32);
-    /* xA yC zC */ octree_set_empty_cube(ot,  16, 208, 208,  32);
-
-    /* xB yA zA */ octree_set_empty_cube(ot, 144,  16,  16,  64);
-    /* xB yA zB */ octree_set_empty_cube(ot, 144,  16, 144,  64);
-    /* xB yA zC */ octree_set_empty_cube(ot, 144,  16, 208,  32);
-    /* xB yB zA */ octree_set_empty_cube(ot, 144, 144,  16,  64);
-    /* xB yB zB */ octree_set_empty_cube(ot, 144, 144, 144,  64);
-    /* xB yB zC */ octree_set_empty_cube(ot, 144, 144, 208,  32);
-    /* xB yC zA */ octree_set_empty_cube(ot, 144, 208,  16,  32);
-    /* xB yC zB */ octree_set_empty_cube(ot, 144, 208, 144,  32);
-    /* xB yC zC */ octree_set_empty_cube(ot, 144, 208, 208,  32);
-
-    /* xC yA zA */ octree_set_empty_cube(ot, 208,  16,  16,  32);
-    /* xC yA zB */ octree_set_empty_cube(ot, 208,  16, 144,  32);
-    /* xC yA zC */ octree_set_empty_cube(ot, 208,  16, 208,  32);
-    /* xC yB zA */ octree_set_empty_cube(ot, 208, 144,  16,  32);
-    /* xC yB zB */ octree_set_empty_cube(ot, 208, 144, 144,  32);
-    /* xC yB zC */ octree_set_empty_cube(ot, 208, 144, 208,  32);
-    /* xC yC zA */ octree_set_empty_cube(ot, 208, 208,  16,  32);
-    /* xC yC zB */ octree_set_empty_cube(ot, 208, 208, 144,  32);
-    /* xC yC zC */ octree_set_empty_cube(ot, 208, 208, 208,  32);
+       Segment sizes differ per letter (128/64/32), so a swept region like
+       "x-segment B, y-segment A, z-segment A" needs box dimensions
+       64x128x128 -- NOT a single-size cube. The previous version called
+       octree_set_empty_cube() (one uniform size for all 3 axes) for every
+       one of the 27 combinations, which only carved a 64x64x64 (or
+       32x32x32) corner of most of them and left the rest of the intended
+       interior un-carved and solid. Sweeping the segment bounds directly
+       with octree_set_empty() (an arbitrary AABB, not a cube) is what
+       each combination actually needs. */
+    static const int seg_min[3] = {16, 144, 208};
+    static const int seg_max[3] = {144, 208, 240};
+    for (int xs = 0; xs < 3; xs++)
+        for (int ys = 0; ys < 3; ys++)
+            for (int zs = 0; zs < 3; zs++)
+                octree_set_empty(ot, seg_min[xs], seg_min[ys], seg_min[zs],
+                                      seg_max[xs], seg_max[ys], seg_max[zs]);
 
     /* ---- 3. Structures ---- */
 

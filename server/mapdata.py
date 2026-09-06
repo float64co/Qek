@@ -168,35 +168,21 @@ def make_default_map():
 
     _solid_cube(root, 0, 0, 0, 256)
 
-    _empty_cube(root,  16,  16,  16, 128)
-    _empty_cube(root,  16,  16, 144,  64)
-    _empty_cube(root,  16,  16, 208,  32)
-    _empty_cube(root,  16, 144,  16,  64)
-    _empty_cube(root,  16, 144, 144,  64)
-    _empty_cube(root,  16, 144, 208,  32)
-    _empty_cube(root,  16, 208,  16,  32)
-    _empty_cube(root,  16, 208, 144,  32)
-    _empty_cube(root,  16, 208, 208,  32)
-
-    _empty_cube(root, 144,  16,  16,  64)
-    _empty_cube(root, 144,  16, 144,  64)
-    _empty_cube(root, 144,  16, 208,  32)
-    _empty_cube(root, 144, 144,  16,  64)
-    _empty_cube(root, 144, 144, 144,  64)
-    _empty_cube(root, 144, 144, 208,  32)
-    _empty_cube(root, 144, 208,  16,  32)
-    _empty_cube(root, 144, 208, 144,  32)
-    _empty_cube(root, 144, 208, 208,  32)
-
-    _empty_cube(root, 208,  16,  16,  32)
-    _empty_cube(root, 208,  16, 144,  32)
-    _empty_cube(root, 208,  16, 208,  32)
-    _empty_cube(root, 208, 144,  16,  32)
-    _empty_cube(root, 208, 144, 144,  32)
-    _empty_cube(root, 208, 144, 208,  32)
-    _empty_cube(root, 208, 208,  16,  32)
-    _empty_cube(root, 208, 208, 144,  32)
-    _empty_cube(root, 208, 208, 208,  32)
+    # Carve interior [16..240]^3 in three non-uniform segments per axis
+    # (same split on x/y/z): A=[16,144) size 128, B=[144,208) size 64,
+    # C=[208,240) size 32. Segment sizes differ per letter, so a swept
+    # region like "x-segment B, y-segment A, z-segment A" needs box
+    # dimensions 64x128x128 -- not a single-size cube. The previous
+    # version called _empty_cube() (one uniform size for all 3 axes) for
+    # every one of the 27 combinations, which only carved a 64x64x64 (or
+    # 32x32x32) corner of most of them and left the rest of the intended
+    # interior un-carved and solid -- mirrors the identical fix in
+    # client/octree.c's octree_make_default_map().
+    seg = [(16, 144), (144, 208), (208, 240)]
+    for xmin, xmax in seg:
+        for ymin, ymax in seg:
+            for zmin, zmax in seg:
+                set_empty(root, xmin, ymin, zmin, xmax, ymax, zmax)
 
     _solid_cube(root,  48, 16,  48, 32)
     _solid_cube(root, 176, 16,  48, 32)
