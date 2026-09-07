@@ -205,25 +205,17 @@ Rocket *physics_fire_rocket(GameState *gs, Player *p) {
     /* Reticule direction — exactly what the crosshair looks at */
     Vec3f aim_dir = vec3_norm((Vec3f){-sy*cp, sp, -cy*cp});
 
-    /* Muzzle point: forward off the player's AABB, down off the eye — in
-     * WORLD space, not camera space. A camera-relative "down" (perpendicular
-     * to aim_dir and world up) sounds right but isn't: as pitch steepens
-     * toward straight down, that vector rotates to point mostly *sideways*
-     * instead of down (classic gimbal-lock behaviour of any roll-free FPS
-     * camera basis), which shoves the muzzle ~20 units horizontally at
-     * exactly the aim angle rocket jumps use, right when it should stay
-     * put. A fixed world-down offset has no such singularity — it stays a
-     * small, predictable dip at every pitch. */
-    Vec3f muzzle = vec3_add(
-        vec3_add(eye, vec3_scale(aim_dir, PLAYER_HALFWIDTH + 4.0f)),
-        (Vec3f){0.0f, -ROCKET_MUZZLE_DOWN, 0.0f}
-    );
-
-    /* Re-converge onto the exact reticule line at ROCKET_CONVERGE_DIST, so
-     * the rocket still travels toward what the crosshair is aiming at
-     * despite launching from below screen-center. */
-    Vec3f target = vec3_add(eye, vec3_scale(aim_dir, ROCKET_CONVERGE_DIST));
-    Vec3f dir    = vec3_norm(vec3_sub(target, muzzle));
+    /* Muzzle point: spawn exactly on the eye's own view ray, nudged only
+     * forward along that same ray (never sideways or vertically) to clear
+     * the player's own collision box. A point on the camera's view ray
+     * always projects to exactly the center of the screen, at any
+     * position or facing — no approximation, unlike an off-axis muzzle
+     * with a "converge back onto the reticule at some distance" correction,
+     * which can only ever be exact at one specific distance and visibly
+     * drifts off-center anywhere else (worse the closer the target, since
+     * the correction has had less distance to complete). */
+    Vec3f muzzle = vec3_add(eye, vec3_scale(aim_dir, PLAYER_HALFWIDTH + 4.0f));
+    Vec3f dir    = aim_dir;
 
     r->pos = muzzle;
     r->vel = vec3_scale(dir, ROCKET_SPEED);

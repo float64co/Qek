@@ -90,7 +90,16 @@ class Vec3:
 # ---------------------------------------------------------------------------
 GRAVITY           = 600.0
 JUMP_SPEED        = 220.0
-MOVE_SPEED        = 200.0
+MOVE_SPEED        = 280.0  # must match client/physics.h's MOVE_SPEED (was 200 --
+                            # a stale mismatch that, combined with a wrong/missing
+                            # accel constant below, made the server's true cruise
+                            # speed ~133 u/s against the client's 280: the
+                            # authoritative position rockets spawn from drifted
+                            # arbitrarily far behind the client's own prediction
+                            # the longer/further a player moved)
+GROUND_ACCEL      = 14.0   # matches client/physics.h's GROUND_ACCEL
+AIR_ACCEL         = 12.0   # matches client/physics.h's AIR_ACCEL
+STOP_SPEED        = 100.0  # matches client/physics.h's STOP_SPEED
 FRICTION          = 12.0   # must match client/physics.h's FRICTION or server-authoritative
                             # movement will fight client-side prediction after every stop
 PLAYER_HALFWIDTH  = 14.0
@@ -104,9 +113,6 @@ ROCKET_SPLASH_DMG = 100.0
 ROCKET_SELF_KNOCKBACK_MULT = 1.6  # self-splash push boosted for higher rocket
                                    # jumps, without changing knockback dealt
                                    # to other players — matches client/physics.h
-ROCKET_MUZZLE_DOWN   = 8.0   # muzzle offset below the eye, in world space —
-                              # matches client/physics.h's ROCKET_MUZZLE_DOWN
-ROCKET_CONVERGE_DIST = 120.0 # matches client/physics.h's ROCKET_CONVERGE_DIST
 
 next_rocket_id = 0
 
@@ -239,23 +245,18 @@ class GameWorld:
         # Reticule direction — exactly what the crosshair looks at
         aim_dir = Vec3(-sy*cp, sp, -cy*cp).normalized()
 
-        # Muzzle: forward off the AABB, down off the eye in WORLD space (not
-        # camera space) — mirrors client/physics.c's physics_fire_rocket().
-        # A camera-relative "down" rotates to point mostly sideways once
-        # pitch gets steep (gimbal lock in any roll-free FPS camera basis),
-        # which would shove the muzzle horizontally at exactly the aim angle
-        # rocket jumps use. A fixed world-down offset has no such singularity.
+        # Muzzle: spawn exactly on the eye's own view ray, nudged only
+        # forward along that ray (never sideways or vertically) to clear
+        # the player's own collision box. Mirrors
+        # client/physics.c's physics_fire_rocket() -- a point on the view
+        # ray always projects to exactly the center of the screen, at any
+        # position or facing, unlike an off-axis muzzle with a
+        # converge-back correction (which is only ever exact at one
+        # distance and drifts off-center anywhere else).
         off    = PLAYER_HALFWIDTH + 2
-        muzzle = eye + aim_dir * off + Vec3(0.0, -ROCKET_MUZZLE_DOWN, 0.0)
-
-        # Re-converge onto the reticule line so the rocket still flies
-        # toward what the crosshair is aiming at
-        target = eye + aim_dir * ROCKET_CONVERGE_DIST
-        d      = (target - muzzle).normalized()
-
-        pos = muzzle
-        vel = d   * ROCKET_SPEED
-        r   = Rocket(next_rocket_id, owner.id, pos, vel)
+        pos    = eye + aim_dir * off
+        vel    = aim_dir * ROCKET_SPEED
+        r      = Rocket(next_rocket_id, owner.id, pos, vel)
         with self.lock:
             self.rockets.append(r)
         return r
@@ -335,24 +336,37 @@ class GameWorld:
                     p.vel.x = 0.0
                     p.vel.z = 0.0
                 else:
-                    accel = 10.0
-                    ws = MOVE_SPEED
-                    curr = p.vel.x*wish.x + p.vel.z*wish.z
-                    add  = ws - curr
+                    # Mirrors client/physics.c's physics_apply_input()
+                    # exactly, including the ORDER (friction, then
+                    # accelerate-with-cap) -- that order is what makes the
+                    # ground case self-correct to precisely MOVE_SPEED at
+                    # equilibrium instead of some lower value. Doing
+                    # accelerate-then-friction (the previous order here),
+                    # or using the wrong accel constant (this used a flat
+                    # 10.0 for both ground and air, instead of
+                    # GROUND_ACCEL/AIR_ACCEL), silently caps the actual
+                    # cruise speed well below MOVE_SPEED -- previously the
+                    # server's true equilibrium speed was ~133 units/s
+                    # against the client's 280, a 2x+ mismatch that made
+                    # the server's authoritative position (which rockets
+                    # spawn from) drift arbitrarily far behind the
+                    # client's own prediction the longer a player moved.
+                    if on_ground:
+                        speed = math.sqrt(p.vel.x**2 + p.vel.z**2)
+                        if speed > 0:
+                            control  = max(speed, STOP_SPEED)
+                            newspeed = max(0.0, speed - dt*control*FRICTION)
+                            scale    = newspeed / speed
+                            p.vel.x *= scale
+                            p.vel.z *= scale
+
+                    accel = GROUND_ACCEL if on_ground else AIR_ACCEL
+                    curr  = p.vel.x*wish.x + p.vel.z*wish.z
+                    add   = MOVE_SPEED - curr
                     if add > 0:
-                        asp = min(accel*dt*ws, add)
+                        asp = min(accel*dt*MOVE_SPEED, add)
                         p.vel.x += asp*wish.x
                         p.vel.z += asp*wish.z
-
-                    # Friction (ground only)
-                    if on_ground:
-                        speed = math.sqrt(p.vel.x**2+p.vel.z**2)
-                        if speed > 0:
-                            drop = max(speed, 100.0)*FRICTION*dt
-                            ns   = max(0, speed-drop)
-                            if speed > 0:
-                                p.vel.x *= ns/speed
-                                p.vel.z *= ns/speed
 
                 # Integrate position
                 p.pos = p.pos + p.vel * dt

@@ -87,23 +87,21 @@ sliding to a stop, while acceleration/turning while a key is held is
 unchanged. Rockets never have gravity applied (pure `pos += vel*dt` on both
 client and server).
 
-Rockets launch from below your eye rather than dead-center — the muzzle point
-is offset a fixed amount straight down in world space, then the shot
-re-targets the exact point the reticule is aiming at (the same convergence
-trick real FPS weapon viewmodels use), so despite visibly originating lower
-it always flies toward what the crosshair says. The offset is deliberately
-world-space rather than camera-space: a camera-relative "down" rotates to
-point mostly sideways once pitch gets steep (gimbal lock, same issue any
-roll-free FPS camera basis has), which would shove the muzzle sideways at
-exactly the aim angle rocket jumps use — a world-down offset has no such
-singularity at any pitch. Both the offset and the convergence distance are
-kept small (`ROCKET_MUZZLE_DOWN`/`ROCKET_CONVERGE_DIST` in `physics.h`) —
-worst-case lateral deviation from the true aim line is bounded by the offset
-itself, and a convergence distance tuned to this arena's actual scale (not
-some arbitrary long-range default) means most real shots are visually close
-to dead-center for their whole flight, not just at one specific distance.
-The rendered rocket box rotates to point along its
-actual travel direction, not the raw view direction.
+Rockets spawn exactly on the eye's own view ray — nudged only forward along
+that same ray (never sideways or vertically) to clear the player's own
+collision box — and travel exactly along `view_dir`
+(`{-sin(yaw)cos(pitch), sin(pitch), -cos(yaw)cos(pitch)}`, the same formula
+shared by the camera, rocket firing, and the editor's raycast). A point on
+the camera's own view ray always projects to exactly the center of the
+screen, at any position or facing — no approximation. An earlier version
+tried a "fire from below screen-center, then re-converge onto the reticule"
+effect (real FPS weapon viewmodels do this), but a converge-back correction
+is only ever exact at one specific distance and visibly drifts off-center
+anywhere else — worse the closer the target, since the correction has less
+distance to complete. That's a real, unfixable limitation of the technique
+at this arena's scale, not a tuning problem, so it was dropped in favor of
+the always-exact on-ray spawn. The rendered rocket box rotates to point
+along its actual travel direction, not the raw view direction.
 
 Crouch is bound to `C`, not `Ctrl` — `Ctrl+W` is a browser-reserved "close tab"
 shortcut that `preventDefault()` cannot block, so `Ctrl` isn't safe to combine
@@ -340,10 +338,26 @@ Key constants (tune in `physics.h`):
 | `ROCKET_FORCE` | 900 | Blast impulse strength |
 | `ROCKET_RADIUS` | 120 | Explosion radius |
 | `ROCKET_SELF_KNOCKBACK_MULT` | 1.6 | Self-splash push multiplier (rocket-jump height) |
-| `ROCKET_MUZZLE_DOWN` | 8 | Muzzle offset below the eye (bottom-center launch point) |
-| `ROCKET_CONVERGE_DIST` | 120 | Distance the muzzle-offset shot re-converges onto the reticule |
-| `AIR_ACCEL` | 10 | Air strafe acceleration |
-| `MOVE_SPEED` | 200 | Ground speed |
+| `MOVE_SPEED` | 280 | Ground speed |
+| `GROUND_ACCEL` | 14 | Ground acceleration |
+| `AIR_ACCEL` | 12 | Air strafe acceleration |
+
+`server.py` keeps its own copies of these four (`MOVE_SPEED`/`GROUND_ACCEL`/
+`AIR_ACCEL`/`STOP_SPEED`), and its movement tick must apply friction and
+acceleration in the *same order* as `physics_apply_input()`'s
+`pm_friction()` → `pm_accelerate()` — friction first — not the reverse.
+Getting either the constants or the order wrong doesn't just feel slightly
+off: with the wrong order, ground friction and acceleration fight each other
+every tick and settle at an equilibrium speed well below `MOVE_SPEED` instead
+of exactly at it (previously ~133 units/s against the client's 280, from a
+combination of a stale `MOVE_SPEED` value and a missing `GROUND_ACCEL`/
+`AIR_ACCEL` split). Since rockets spawn from the server's authoritative
+position — the client doesn't locally predict its own fired rocket at all
+when connected — a mismatch here doesn't stay a movement-feel nitpick, it
+makes every rocket you fire appear to originate further and further behind
+where you actually are the longer/further you've been moving, because the
+server's tracked position falls increasingly behind the client's own
+prediction with no reconciliation pulling them back together.
 
 ---
 
